@@ -1,11 +1,5 @@
 import { Router } from "express";
-import {
-  createOrder,
-  getMyOrders,
-  getAllOrders,
-  getOrderById,
-  updateOrderStatus,
-} from "../controllers/order.controller";
+import {createOrder,getMyOrders,getAllOrders,getOrderById,updateOrderStatus,} from "../controllers/order.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { adminMiddleware, userMiddleware } from "../middlewares/role.middleware";
 import { validateMiddleware } from "../middlewares/validate.middleware";

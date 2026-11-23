@@ -141,7 +141,7 @@ export async function updateExpense(req: Request, res: Response) {
         title || null,
         dbCategory,
         amount !== undefined ? amount : null,
-        description || null,
+        description !== undefined ? description.trim() || null : null,
         expense_date || null,
         id,
       ]
@@ -155,9 +155,15 @@ export async function updateExpense(req: Request, res: Response) {
       [id]
     );
 
+    if (rows.length === 0) {
+      return res.status(404).json({
+        message: "Data pengeluaran tidak ditemukan.",
+      });
+    }
+
     return res.status(200).json({
       message: "Biaya operasional berhasil diperbarui.",
-      data: mapExpenseRow(rows[0] || {}),
+      data: mapExpenseRow(rows[0]),
     });
   } catch (error) {
     console.error("UpdateExpense error:", error);
@@ -171,6 +177,17 @@ export async function updateExpense(req: Request, res: Response) {
 export async function deleteExpense(req: Request, res: Response) {
   try {
     const id = Number(req.params.id);
+
+    const [existing]: any = await db.execute(
+      "SELECT id FROM pengeluaran WHERE id = ? LIMIT 1",
+      [id]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        message: "Data pengeluaran tidak ditemukan.",
+      });
+    }
 
     await db.execute("DELETE FROM pengeluaran WHERE id = ?", [id]);
 

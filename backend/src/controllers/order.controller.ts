@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import crypto from "crypto";
 import db from "../database/database";
 import { notifyAdminNewOrder, notifyUserOrderStatus } from "../sockets/notification.socket";
 import {
@@ -32,16 +33,32 @@ export async function createOrder(req: Request, res: Response) {
 
   try {
     const userId = req.user!.id;
-    const { items, delivery_address, notes, payment_method } = req.body;
+    const { items, delivery_address, notes, payment_method, recipient_name, recipient_phone } =
+      req.body;
 
     await connection.beginTransaction();
 
-    // Ambil nama pemesan
+    // Ambil nama & telepon pemesan (dipakai untuk kolom wajib di tabel pesanan)
     const [users]: any = await connection.execute(
-      "SELECT nama_pengguna AS name FROM pengguna WHERE id = ? LIMIT 1",
+      "SELECT nama_pengguna AS name, telepon AS phone FROM pengguna WHERE id = ? LIMIT 1",
       [userId]
     );
-    const userName = users[0]?.name || "Pelanggan";
+    // Nama/telepon penerima bisa diisi di form checkout. Kalau kosong, pakai data akun.
+    const userName =
+      typeof recipient_name === "string" && recipient_name.trim().length >= 2
+        ? recipient_name.trim()
+        : users[0]?.name || "Pelanggan";
+    const userPhone =
+      typeof recipient_phone === "string" && recipient_phone.trim().length >= 8
+        ? recipient_phone.trim()
+        : users[0]?.phone || "-";
+
+    // Hubungkan pesanan ke alamat utama user bila tersedia.
+    const [addresses]: any = await connection.execute(
+      "SELECT id FROM alamat WHERE pengguna_id = ? AND utama = TRUE ORDER BY id LIMIT 1",
+      [userId]
+    );
+    const alamatId = addresses[0]?.id || null;
 
     let totalAmount = 0;
     let totalCapital = 0;
@@ -105,22 +122,41 @@ export async function createOrder(req: Request, res: Response) {
         subtotalCapital,
       });
 
-      // Kurangi stok produk
-      await connection.execute(
-        "UPDATE produk SET stok = stok - ? WHERE id = ?",
-        [item.quantity, product.id]
+      // Kurangi stok produk. Pakai syarat stok >= jumlah agar aman
+      // kalau dua user memesan produk yang sama bersamaan.
+      const [stockUpdate]: any = await connection.execute(
+        "UPDATE produk SET stok = stok - ? WHERE id = ? AND stok >= ?",
+        [item.quantity, product.id, item.quantity]
       );
+
+      if (stockUpdate.affectedRows === 0) {
+        await connection.rollback();
+        return res.status(400).json({
+          message: `Stok produk ${product.name} tidak mencukupi. Silakan kurangi jumlah pesanan.`,
+        });
+      }
     }
 
     // Generate kode pesanan sederhana langsung di controller
-    const orderCode = `ORD-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const orderCode = `ORD-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 
     // Simpan ke tabel pesanan
     const [orderResult]: any = await connection.execute(
       `INSERT INTO pesanan
-       (nomor_pesanan, pengguna_id, subtotal, total_jumlah, status, alamat_pengiriman, catatan)
-       VALUES (?, ?, ?, ?, 'tertunda', ?, ?)`,
-      [orderCode, userId, totalAmount, totalAmount, delivery_address, notes || null]
+       (nomor_pesanan, pengguna_id, alamat_id, nama_penerima, telepon_penerima,
+        subtotal, total_jumlah, status, alamat_pengiriman, catatan)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'tertunda', ?, ?)`,
+      [
+        orderCode,
+        userId,
+        alamatId,
+        userName,
+        userPhone,
+        totalAmount,
+        totalAmount,
+        delivery_address,
+        notes || null,
+      ]
     );
 
     const orderId = orderResult.insertId;
@@ -153,15 +189,15 @@ export async function createOrder(req: Request, res: Response) {
 
     // Notifikasi internal untuk admin
     const [admins]: any = await connection.execute(
-      "SELECT id FROM pengguna WHERE peran = 'admin' LIMIT 1"
+      "SELECT id FROM pengguna WHERE peran = 'admin'"
     );
-    if (admins.length > 0) {
+    for (const admin of admins) {
       await connection.execute(
         `INSERT INTO notifikasi
          (pengguna_id, pesanan_id, judul, pesan, jenis, peran)
          VALUES (?, ?, ?, ?, 'pesanan_baru', 'admin')`,
         [
-          admins[0].id,
+          admin.id,
           orderId,
           "Pesanan Baru Masuk!",
           `Pesanan ${orderCode} dari ${userName} menunggu diproses.`,
@@ -295,7 +331,7 @@ export async function getOrderById(req: Request, res: Response) {
               (oi.harga_modal * oi.kuantitas) AS subtotal_capital,
               pr.gambar_url AS image_url
        FROM item_pesanan oi
-       JOIN produk pr ON oi.produk_id = pr.id
+       LEFT JOIN produk pr ON oi.produk_id = pr.id
        WHERE oi.pesanan_id = ?`,
       [orderId]
     );
@@ -316,16 +352,26 @@ export async function getOrderById(req: Request, res: Response) {
 
 // 5. Update Status Pesanan (Admin) + Kirim Notifikasi Socket ke User
 export async function updateOrderStatus(req: Request, res: Response) {
+  const connection = await db.getConnection();
+
   try {
     const orderId = Number(req.params.id);
     const { status } = req.body;
 
-    const [rows]: any = await db.execute(
-      "SELECT id, nomor_pesanan AS order_code, pengguna_id AS user_id FROM pesanan WHERE id = ? LIMIT 1",
+    await connection.beginTransaction();
+
+    const [rows]: any = await connection.execute(
+      `SELECT o.id, o.nomor_pesanan AS order_code, o.pengguna_id AS user_id, o.status,
+              p.status_pembayaran AS payment_status,
+              p.metode_pembayaran AS payment_method
+       FROM pesanan o
+       LEFT JOIN pembayaran p ON p.pesanan_id = o.id
+       WHERE o.id = ? LIMIT 1 FOR UPDATE`,
       [orderId]
     );
 
     if (rows.length === 0) {
+      await connection.rollback();
       return res.status(404).json({
         message: "Pesanan tidak ditemukan.",
       });
@@ -333,14 +379,94 @@ export async function updateOrderStatus(req: Request, res: Response) {
 
     const order = rows[0];
     const dbStatus = orderStatusToDb[status] || status;
+
+    // Kalau statusnya sama, jangan buat notifikasi dobel
+    if (order.status === dbStatus) {
+      await connection.rollback();
+      return res.status(200).json({
+        message: "Status tidak berubah.",
+        data: {
+          order_id: orderId,
+          order_code: order.order_code,
+          status,
+        },
+      });
+    }
+
+    // Pesanan yang sudah dibatalkan tidak bisa diubah lagi
+    if (order.status === "dibatalkan") {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Pesanan yang sudah dibatalkan tidak bisa diubah lagi.",
+      });
+    }
+
+    // Transfer/QRIS belum boleh dikirim atau selesai sebelum admin verifikasi bayar.
+    // COD tidak diblokir karena pembayarannya memang dilakukan saat pengiriman.
+    const butuhVerifikasi =
+      dbStatus === "dikirim" || dbStatus === "selesai" || status === "delivering" || status === "completed";
+    const metodeCod = order.payment_method === "tunai" || order.payment_method === "cod";
+    if (butuhVerifikasi && !metodeCod && order.payment_status !== "dibayar") {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Verifikasi pembayaran terlebih dahulu sebelum pesanan dikirim atau diselesaikan.",
+      });
+    }
+
+    // Pembatalan hanya boleh sebelum barang dikirim
+    const statusBisaDibatalkan = ["tertunda", "dikonfirmasi", "diproses", "siap"];
+    if (dbStatus === "dibatalkan" && !statusBisaDibatalkan.includes(order.status)) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Pesanan sudah dikirim/selesai sehingga tidak bisa dibatalkan.",
+      });
+    }
+
+    // Urutan status agar tidak bisa mundur (misal selesai -> pending)
+    if (dbStatus !== "dibatalkan") {
+      const urutanStatus: Record<string, number> = {
+        tertunda: 1,
+        dikonfirmasi: 2,
+        diproses: 2,
+        siap: 3,
+        dikirim: 4,
+        selesai: 5,
+      };
+
+      const statusSekarang = urutanStatus[order.status] ?? 0;
+      const statusBaru = urutanStatus[dbStatus] ?? 0;
+
+      if (statusBaru < statusSekarang) {
+        await connection.rollback();
+        return res.status(400).json({
+          message: "Status pesanan tidak bisa dikembalikan ke tahap sebelumnya.",
+        });
+      }
+    }
+
+    // Kalau pesanan dibatalkan, kembalikan stok produk yang sudah dipotong
+    if (dbStatus === "dibatalkan") {
+      const [items]: any = await connection.execute(
+        "SELECT produk_id, kuantitas FROM item_pesanan WHERE pesanan_id = ?",
+        [orderId]
+      );
+
+      for (const item of items) {
+        await connection.execute(
+          "UPDATE produk SET stok = stok + ? WHERE id = ?",
+          [item.kuantitas, item.produk_id]
+        );
+      }
+    }
+
     const completedAt = dbStatus === "selesai" ? ", selesai_pada = NOW()" : "";
 
-    await db.execute(
+    await connection.execute(
       `UPDATE pesanan SET status = ?${completedAt} WHERE id = ?`,
       [dbStatus, orderId]
     );
 
-    await db.execute(
+    await connection.execute(
       `INSERT INTO notifikasi
        (pengguna_id, pesanan_id, judul, pesan, jenis, peran)
        VALUES (?, ?, ?, ?, 'status_pesanan', 'user')`,
@@ -351,6 +477,8 @@ export async function updateOrderStatus(req: Request, res: Response) {
         `Pesanan ${order.order_code} berstatus: ${status}.`,
       ]
     );
+
+    await connection.commit();
 
     // Kirim notifikasi real-time via Socket.io ke User pemesan
     notifyUserOrderStatus(order.user_id, {
@@ -367,9 +495,12 @@ export async function updateOrderStatus(req: Request, res: Response) {
       },
     });
   } catch (error) {
+    await connection.rollback();
     console.error("UpdateOrderStatus error:", error);
     return res.status(500).json({
       message: "Terjadi kesalahan saat memperbarui status pesanan.",
     });
+  } finally {
+    connection.release();
   }
 }

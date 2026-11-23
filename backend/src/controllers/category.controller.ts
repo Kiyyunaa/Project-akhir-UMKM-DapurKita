@@ -87,13 +87,20 @@ export async function updateCategory(req: Request, res: Response) {
          nama = COALESCE(?, nama),
          deskripsi = COALESCE(?, deskripsi)
        WHERE id = ?`,
-      [name || null, description || null, id]
+      // Deskripsi kosong tidak boleh menghapus deskripsi lama.
+      [name || null, description !== undefined ? description.trim() || null : null, id]
     );
 
     const [categories]: any = await db.execute(
       "SELECT id, nama AS name, deskripsi AS description FROM kategori WHERE id = ? LIMIT 1",
       [id]
     );
+
+    if (categories.length === 0) {
+      return res.status(404).json({
+        message: "Kategori tidak ditemukan.",
+      });
+    }
 
     return res.status(200).json({
       message: "Kategori berhasil diperbarui.",
@@ -112,12 +119,33 @@ export async function deleteCategory(req: Request, res: Response) {
   try {
     const id = Number(req.params.id);
 
+    const [categories]: any = await db.execute(
+      "SELECT id FROM kategori WHERE id = ? LIMIT 1",
+      [id]
+    );
+
+    if (categories.length === 0) {
+      return res.status(404).json({
+        message: "Kategori tidak ditemukan.",
+      });
+    }
+
     await db.execute("DELETE FROM kategori WHERE id = ?", [id]);
 
     return res.status(200).json({
       message: "Kategori berhasil dihapus.",
     });
-  } catch (error) {
+  } catch (error: any) {
+    // Kategori yang masih dipakai produk ditolak database (FK RESTRICT).
+    // Beri pesan yang bisa diperbaiki user, bukan error server umum.
+    if (
+      error?.code === "ER_ROW_IS_REFERENCED" ||
+      error?.code === "ER_ROW_IS_REFERENCED_2"
+    ) {
+      return res.status(400).json({
+        message: "Kategori masih digunakan produk. Pindahkan produk terlebih dahulu.",
+      });
+    }
     console.error("DeleteCategory error:", error);
     return res.status(500).json({
       message: "Terjadi kesalahan saat menghapus kategori.",

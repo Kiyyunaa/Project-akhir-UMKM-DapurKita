@@ -1,11 +1,5 @@
 import { Router } from "express";
-import {
-  getAllExpenses,
-  getExpenseById,
-  createExpense,
-  updateExpense,
-  deleteExpense,
-} from "../controllers/expense.controller";
+import {getAllExpenses,getExpenseById,createExpense,updateExpense,deleteExpense,} from "../controllers/expense.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { adminMiddleware } from "../middlewares/role.middleware";
 import { validateMiddleware } from "../middlewares/validate.middleware";

@@ -16,6 +16,9 @@ initSocket(server);
 
 async function startServer() {
   try {
+    // Pastikan tabel tersedia sebelum seeder/admin dijalankan
+    await initializeDatabase();
+
     // Jalankan seeder admin otomatis jika belum ada akun admin
     await seedAdmin();
 

@@ -27,8 +27,9 @@ export async function getMyNotifications(req: Request, res: Response) {
     if (role === "admin") {
       sql = `SELECT ${NOTIFICATION_SELECT}
              FROM notifikasi
-             WHERE peran IN ('admin', 'all')
+             WHERE pengguna_id = ? AND peran IN ('admin', 'all')
              ORDER BY id DESC LIMIT 50`;
+      params = [userId];
     } else {
       sql = `SELECT ${NOTIFICATION_SELECT}
              FROM notifikasi
@@ -55,6 +56,24 @@ export async function getMyNotifications(req: Request, res: Response) {
 export async function markAsRead(req: Request, res: Response) {
   try {
     const id = Number(req.params.id);
+
+    // Pastikan notifikasi ini milik user yang login
+    const [rows]: any = await db.execute(
+      "SELECT pengguna_id AS user_id FROM notifikasi WHERE id = ? LIMIT 1",
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        message: "Notifikasi tidak ditemukan.",
+      });
+    }
+
+    if (rows[0].user_id !== req.user!.id) {
+      return res.status(403).json({
+        message: "Akses ditolak. Notifikasi ini bukan milik Anda.",
+      });
+    }
 
     await db.execute("UPDATE notifikasi SET dibaca = TRUE WHERE id = ?", [id]);
 

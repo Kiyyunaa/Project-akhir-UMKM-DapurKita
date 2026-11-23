@@ -9,11 +9,20 @@ export function errorMiddleware(
 ) {
   console.error("Terjadi error:", err);
 
-  const statusCode = err.status || err.statusCode || 500;
-  const message = err.message || "Terjadi kesalahan pada server.";
+  // Multer memakai kode LIMIT_FILE_SIZE untuk file > 5MB. Ini kesalahan input
+  // user, jadi harus dibalas 400 agar pesannya sampai ke aplikasi.
+  const statusCode =
+    err.status || err.statusCode || (err.code === "LIMIT_FILE_SIZE" ? 400 : 500);
 
-  return res.status(statusCode).json({
-    message,
-    error: process.env.NODE_ENV === "development" ? err.stack : undefined,
-  });
+  if (err.code === "LIMIT_FILE_SIZE") {
+    err.message = "Ukuran gambar maksimal 5MB.";
+  }
+
+  // Error 500 tidak boleh membocorkan detail query / stack ke client
+  const message =
+    statusCode >= 500
+      ? "Terjadi kesalahan pada server."
+      : err.message || "Terjadi kesalahan pada server.";
+
+  return res.status(statusCode).json({ message });
 }

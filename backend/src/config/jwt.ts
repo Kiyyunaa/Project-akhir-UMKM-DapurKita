@@ -3,8 +3,12 @@ import jwt, { SignOptions } from "jsonwebtoken";
 
 dotenv.config();
 
-const jwtSecret = process.env.jwt_secret || process.env.JWT_SECRET || "dapurkita_jwt_secret_key";
+const jwtSecret = (process.env.jwt_secret || process.env.JWT_SECRET) as string;
 const jwtExpiresIn = process.env.jwt_expires_in || process.env.JWT_EXPIRES_IN || "14d";
+
+if (!jwtSecret) {
+  throw new Error("JWT_SECRET wajib diisi di file .env.");
+}
 
 export type UserRole = "admin" | "user";
 
@@ -13,6 +17,7 @@ export type JwtPayload = {
   role: UserRole;
   name: string;
   email: string;
+  token_version?: number;
 };
 
 // Membuat token JWT

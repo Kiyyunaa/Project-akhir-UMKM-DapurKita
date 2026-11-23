@@ -8,6 +8,9 @@ export const createOrderSchema = z.object({
     })
   ).min(1, "Pesanan minimal harus ada 1 produk"),
   delivery_address: z.string().min(5, "Alamat pengantaran minimal 5 karakter"),
+  // Opsional: bila diisi, ini yang dipakai sebagai penerima di pesanan.
+  recipient_name: z.string().min(2, "Nama penerima minimal 2 karakter").optional(),
+  recipient_phone: z.string().min(8, "Telepon penerima minimal 8 karakter").optional(),
   notes: z.string().optional(),
   payment_method: z.enum(["cod", "transfer", "qris"]).default("cod"),
 });

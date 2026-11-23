@@ -1,9 +1,5 @@
 import { Router } from "express";
-import {
-  uploadPaymentProof,
-  updatePaymentStatus,
-  getPaymentByOrderId,
-} from "../controllers/payment.controller";
+import {uploadPaymentProof,updatePaymentStatus,getPaymentByOrderId,} from "../controllers/payment.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { adminMiddleware } from "../middlewares/role.middleware";
 import { upload } from "../middlewares/upload.middleware";

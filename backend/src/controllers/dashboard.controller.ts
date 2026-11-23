@@ -13,22 +13,30 @@ export async function getFinancialAnalytics(req: Request, res: Response) {
   try {
     const { start_date, end_date } = req.query;
 
-    let orderFilter = "o.status != 'dibatalkan'";
+    // Omset/laba hanya dihitung dari pesanan yang pembayarannya sudah diverifikasi.
+    let orderFilter =
+      "o.status != 'dibatalkan' AND EXISTS (SELECT 1 FROM pembayaran p WHERE p.pesanan_id = o.id AND p.status_pembayaran = 'dibayar')";
     let expenseFilter = "1=1";
+    let statusFilter = "1=1";
     const orderParams: any[] = [];
     const expenseParams: any[] = [];
+    const statusParams: any[] = [];
 
     if (start_date) {
       orderFilter += " AND DATE(o.dibuat_pada) >= ?";
       expenseFilter += " AND e.tanggal_pengeluaran >= ?";
+      statusFilter += " AND DATE(o.dibuat_pada) >= ?";
       orderParams.push(start_date);
       expenseParams.push(start_date);
+      statusParams.push(start_date);
     }
     if (end_date) {
       orderFilter += " AND DATE(o.dibuat_pada) <= ?";
       expenseFilter += " AND e.tanggal_pengeluaran <= ?";
+      statusFilter += " AND DATE(o.dibuat_pada) <= ?";
       orderParams.push(end_date);
       expenseParams.push(end_date);
+      statusParams.push(end_date);
     }
 
     // Hitung Omset (Gross Revenue) & Total Modal (HPP)
@@ -69,7 +77,11 @@ export async function getFinancialAnalytics(req: Request, res: Response) {
 
     // Distribusi Status Pesanan
     const [orderStatusStats]: any = await db.query(
-      "SELECT o.status, COUNT(o.id) AS count FROM pesanan o GROUP BY o.status"
+      `SELECT o.status, COUNT(o.id) AS count
+       FROM pesanan o
+       WHERE ${statusFilter}
+       GROUP BY o.status`,
+      statusParams
     );
 
     // Statistik Produk
@@ -125,9 +137,9 @@ export async function getSalesChart(req: Request, res: Response) {
            COALESCE(SUM(o.total_jumlah), 0) AS revenue,
            COALESCE(SUM(${TOTAL_CAPITAL}), 0) AS cogs
          FROM pesanan o
-         WHERE o.status != 'dibatalkan'
+         WHERE o.status != 'dibatalkan' AND EXISTS (SELECT 1 FROM pembayaran p WHERE p.pesanan_id = o.id AND p.status_pembayaran = 'dibayar')
          GROUP BY period
-         ORDER BY period ASC
+         ORDER BY period DESC
          LIMIT 12`
       );
 
@@ -137,21 +149,32 @@ export async function getSalesChart(req: Request, res: Response) {
            COALESCE(SUM(e.jumlah), 0) AS expense
          FROM pengeluaran e
          GROUP BY period
-         ORDER BY period ASC
+         ORDER BY period DESC
          LIMIT 12`
       );
 
       const expMap = new Map<string, number>();
-      expenses.forEach((e: any) => expMap.set(e.period, Number(e.expense)));
+      expenses.forEach((e: any) => expMap.set(String(e.period), Number(e.expense)));
 
-      const chartData = orders.map((o: any) => {
-        const rev = Number(o.revenue);
-        const cogs = Number(o.cogs);
-        const exp = expMap.get(o.period) || 0;
+      // Buat daftar 12 bulan terakhir (termasuk bulan yang tidak ada order)
+      const months: string[] = [];
+      const nowWib = new Date(Date.now() + 7 * 60 * 60 * 1000);
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(
+          Date.UTC(nowWib.getUTCFullYear(), nowWib.getUTCMonth() - i, 1)
+        );
+        months.push(d.toISOString().slice(0, 7));
+      }
+
+      const chartData = months.map((period) => {
+        const o = orders.find((item: any) => String(item.period) === period);
+        const rev = o ? Number(o.revenue) : 0;
+        const cogs = o ? Number(o.cogs) : 0;
+        const exp = expMap.get(period) || 0;
         const gross = rev - cogs;
         const net = gross - exp;
         return {
-          period: o.period,
+          period,
           revenue: rev,
           cogs,
           gross_profit: gross,
@@ -169,40 +192,48 @@ export async function getSalesChart(req: Request, res: Response) {
     // Default: Harian (14 hari terakhir)
     const [dailyOrders]: any = await db.query(
       `SELECT
-         DATE(o.dibuat_pada) AS period,
+         DATE_FORMAT(o.dibuat_pada, '%Y-%m-%d') AS period,
          COALESCE(SUM(o.total_jumlah), 0) AS revenue,
          COALESCE(SUM(${TOTAL_CAPITAL}), 0) AS cogs
        FROM pesanan o
-       WHERE o.status != 'dibatalkan' AND o.dibuat_pada >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+       WHERE o.status != 'dibatalkan' AND EXISTS (SELECT 1 FROM pembayaran p WHERE p.pesanan_id = o.id AND p.status_pembayaran = 'dibayar') AND o.dibuat_pada >= DATE_SUB(CURDATE(), INTERVAL 13 DAY)
        GROUP BY period
        ORDER BY period ASC`
     );
 
     const [dailyExpenses]: any = await db.query(
       `SELECT
-         e.tanggal_pengeluaran AS period,
+         DATE_FORMAT(e.tanggal_pengeluaran, '%Y-%m-%d') AS period,
          COALESCE(SUM(e.jumlah), 0) AS expense
        FROM pengeluaran e
-       WHERE e.tanggal_pengeluaran >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+       WHERE e.tanggal_pengeluaran >= DATE_SUB(CURDATE(), INTERVAL 13 DAY)
        GROUP BY period
        ORDER BY period ASC`
     );
 
     const expMap = new Map<string, number>();
     dailyExpenses.forEach((e: any) => {
-      const key = new Date(e.period).toISOString().split("T")[0];
+      const key = String(e.period);
       expMap.set(key, Number(e.expense));
     });
 
-    const chartData = dailyOrders.map((o: any) => {
-      const key = new Date(o.period).toISOString().split("T")[0];
-      const rev = Number(o.revenue);
-      const cogs = Number(o.cogs);
-      const exp = expMap.get(key) || 0;
+    // Buat daftar 14 hari terakhir (WIB) supaya hari kosong tetap tampil
+    const days: string[] = [];
+    const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000);
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(todayWib.getTime() - i * 24 * 60 * 60 * 1000);
+      days.push(d.toISOString().slice(0, 10));
+    }
+
+    const chartData = days.map((period) => {
+      const o = dailyOrders.find((item: any) => String(item.period) === period);
+      const rev = o ? Number(o.revenue) : 0;
+      const cogs = o ? Number(o.cogs) : 0;
+      const exp = expMap.get(period) || 0;
       const gross = rev - cogs;
       const net = gross - exp;
       return {
-        period: key,
+        period,
         revenue: rev,
         cogs,
         gross_profit: gross,

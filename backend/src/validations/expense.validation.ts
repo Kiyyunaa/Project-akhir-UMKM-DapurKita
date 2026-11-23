@@ -8,7 +8,11 @@ export const expenseSchema = z.object({
   expense_date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Format tanggal harus YYYY-MM-DD")
-    .default(() => new Date().toISOString().split("T")[0]),
+    .default(() => {
+      // Pakai WIB (UTC+7) supaya tidak mundur sehari antara jam 00.00-07.00
+      const todayWib = new Date(Date.now() + 7 * 60 * 60 * 1000);
+      return todayWib.toISOString().split("T")[0];
+    }),
 });
 
 export const updateExpenseSchema = z.object({

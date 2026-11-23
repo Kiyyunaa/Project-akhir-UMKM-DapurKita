@@ -32,7 +32,7 @@ export const paymentMethodToDb: Record<string, string> = {
 export const paymentMethodFromDb: Record<string, string> = {
   tunai: "cod",
   transfer_bank: "transfer",
-  dompet_digital: "transfer",
+  dompet_digital: "dompet_digital",
   qris: "qris",
 };
 

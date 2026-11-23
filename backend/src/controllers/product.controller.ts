@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import db from "../database/database";
-import { uploadToCloudinary } from "../config/cloudinary";
+import { uploadToCloudinary, deleteFromCloudinary } from "../config/cloudinary";
 import { notifyNewProduct } from "../sockets/notification.socket";
 
 // Kolom database Bahasa Indonesia -> kontrak API Bahasa Inggris
@@ -93,6 +93,8 @@ export async function getProductById(req: Request, res: Response) {
 
 // 3. Tambah Produk Baru (Admin) + Upload Foto ke Cloudinary + Socket Real-time
 export async function createProduct(req: Request, res: Response) {
+  let imagePublicId: string | null = null;
+
   try {
     const {
       category_id,
@@ -105,7 +107,6 @@ export async function createProduct(req: Request, res: Response) {
     } = req.body;
 
     let imageUrl: string | null = null;
-    let imagePublicId: string | null = null;
 
     // Upload foto ke Cloudinary jika ada file yang diunggah
     if (req.file) {
@@ -133,6 +134,7 @@ export async function createProduct(req: Request, res: Response) {
     );
 
     const productId = result.insertId;
+    imagePublicId = null;
 
     const [newProduct]: any = await db.execute(
       `SELECT ${PRODUCT_SELECT}
@@ -152,6 +154,13 @@ export async function createProduct(req: Request, res: Response) {
       data: productData,
     });
   } catch (error) {
+    if (imagePublicId) {
+      try {
+        await deleteFromCloudinary(imagePublicId);
+      } catch (cleanupError) {
+        console.warn("Gagal membersihkan gambar produk baru:", cleanupError);
+      }
+    }
     console.error("CreateProduct error:", error);
     return res.status(500).json({
       message: "Terjadi kesalahan saat menambahkan produk.",
@@ -161,6 +170,8 @@ export async function createProduct(req: Request, res: Response) {
 
 // 4. Update Produk (Admin)
 export async function updateProduct(req: Request, res: Response) {
+  let uploadedPublicId: string | null = null;
+
   try {
     const id = Number(req.params.id);
     const {
@@ -187,12 +198,14 @@ export async function updateProduct(req: Request, res: Response) {
 
     let imageUrl = existing[0].gambar_url;
     let imagePublicId = existing[0].gambar_public_id;
+    const oldPublicId = req.file ? existing[0].gambar_public_id : null;
 
     // Jika admin mengunggah gambar baru
     if (req.file) {
       const uploadResult = await uploadToCloudinary(req.file.buffer, "dapurkita/products");
       imageUrl = uploadResult.secure_url;
       imagePublicId = uploadResult.public_id;
+      uploadedPublicId = uploadResult.public_id;
     }
 
     await db.execute(
@@ -210,7 +223,8 @@ export async function updateProduct(req: Request, res: Response) {
       [
         category_id !== undefined ? category_id : null,
         name || null,
-        description || null,
+        // Deskripsi kosong tidak boleh menghapus deskripsi lama saat edit.
+        description !== undefined ? description.trim() || null : null,
         capital_price !== undefined ? capital_price : null,
         selling_price !== undefined ? selling_price : null,
         stock !== undefined ? stock : null,
@@ -220,6 +234,7 @@ export async function updateProduct(req: Request, res: Response) {
         id,
       ]
     );
+    uploadedPublicId = null;
 
     const [updated]: any = await db.execute(
       `SELECT ${PRODUCT_SELECT}
@@ -229,11 +244,27 @@ export async function updateProduct(req: Request, res: Response) {
       [id]
     );
 
+    // Hapus gambar lama hanya kalau database sudah berhasil diperbarui
+    if (oldPublicId) {
+      try {
+        await deleteFromCloudinary(oldPublicId);
+      } catch (error) {
+        console.warn("Gagal menghapus gambar lama produk:", error);
+      }
+    }
+
     return res.status(200).json({
       message: "Produk berhasil diperbarui.",
       data: updated[0],
     });
   } catch (error) {
+    if (uploadedPublicId) {
+      try {
+        await deleteFromCloudinary(uploadedPublicId);
+      } catch (cleanupError) {
+        console.warn("Gagal membersihkan gambar produk baru:", cleanupError);
+      }
+    }
     console.error("UpdateProduct error:", error);
     return res.status(500).json({
       message: "Terjadi kesalahan saat memperbarui produk.",
@@ -246,7 +277,26 @@ export async function deleteProduct(req: Request, res: Response) {
   try {
     const id = Number(req.params.id);
 
+    const [existing]: any = await db.execute(
+      "SELECT id, gambar_public_id FROM produk WHERE id = ? LIMIT 1",
+      [id]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        message: "Produk tidak ditemukan.",
+      });
+    }
+
     await db.execute("DELETE FROM produk WHERE id = ?", [id]);
+
+    if (existing[0].gambar_public_id) {
+      try {
+        await deleteFromCloudinary(existing[0].gambar_public_id);
+      } catch (error) {
+        console.warn("Gagal menghapus gambar produk:", error);
+      }
+    }
 
     return res.status(200).json({
       message: "Produk berhasil dihapus.",

@@ -11,7 +11,12 @@ export const upload = multer({
     if (allowedTypes.includes(file.mimetype)) {
       callback(null, true);
     } else {
-      callback(new Error("Format file harus JPG, JPEG, PNG, atau WEBP."));
+      // Beri status 400 supaya Flutter menerima pesan ini, bukan error 500 umum.
+      const error = new Error("Format file harus JPG, JPEG, PNG, atau WEBP.") as Error & {
+        status: number;
+      };
+      error.status = 400;
+      callback(error);
     }
   },
 });

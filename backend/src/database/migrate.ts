@@ -160,6 +160,10 @@ const schemaStatements: string[] = [
 // Kolom tambahan yang dibutuhkan API bila tabel sudah dibuat sebelumnya
 // (MySQL tidak mendukung ADD COLUMN IF NOT EXISTS, jadi dicek dulu).
 const additionalColumns: Array<{ table: string; column: string; definition: string }> = [
+  { table: "pengguna", column: "aktif", definition: "BOOLEAN NOT NULL DEFAULT TRUE" },
+  { table: "pengguna", column: "token_version", definition: "INT NOT NULL DEFAULT 0" },
+  { table: "pengguna", column: "gambar_url", definition: "VARCHAR(255) NULL" },
+  { table: "pengguna", column: "gambar_public_id", definition: "VARCHAR(150) NULL" },
   { table: "pembayaran", column: "bukti_url", definition: "TEXT NULL" },
   { table: "pembayaran", column: "bukti_public_id", definition: "VARCHAR(150) NULL" },
   {
@@ -168,6 +172,19 @@ const additionalColumns: Array<{ table: string; column: string; definition: stri
     definition: "ENUM('user', 'admin', 'all') NOT NULL DEFAULT 'all'",
   },
   { table: "notifikasi", column: "data", definition: "JSON NULL" },
+  // Kolom pesanan yang wajib diisi saat createOrder. Tanpa ini, database lama
+  // tetap error walaupun kode sudah mengirim nama/telepon penerima.
+  {
+    table: "pesanan",
+    column: "nama_penerima",
+    definition: "VARCHAR(100) NOT NULL DEFAULT ''",
+  },
+  {
+    table: "pesanan",
+    column: "telepon_penerima",
+    definition: "VARCHAR(20) NOT NULL DEFAULT '-'",
+  },
+  { table: "pesanan", column: "alamat_id", definition: "INT NULL" },
 ];
 
 async function ensureColumn(table: string, column: string, definition: string): Promise<void> {
