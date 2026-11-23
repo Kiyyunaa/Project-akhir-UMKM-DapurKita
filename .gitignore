@@ -1,9 +1,44 @@
+# backend
+backend/node_modules/
+backend/dist/
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# flutter
+dapur_kita/.dart_tool/
+dapur_kita/build/
+dapur_kita/.flutter-plugins
+dapur_kita/.flutter-plugins-dependencies
+dapur_kita/.packages
+dapur_kita/.idea/
+dapur_kita/*.iml
+dapur_kita/android/.gradle/
+dapur_kita/ios/Pods/
+
+# backup
+dapur_kita_lama/
+
+# root generated folders
 node_modules/
 dist/
+
+# environment files
 .env
+
+# logs
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.DS_Store
 
+# operating system
+.DS_Store
+Thumbs.db
+
+# generated build files
+dapur_kita/android/build/
+dapur_kita/ios/Flutter/ephemeral/
+dapur_kita/linux/flutter/ephemeral/
+dapur_kita/macos/Flutter/ephemeral/
+dapur_kita/windows/flutter/ephemeral/
