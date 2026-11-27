@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import mysql from "mysql2/promise";
 
-dotenv.config();
+dotenv.config({ path: "backend/.env" });
 
 const dbHost = process.env.db_host || process.env.DB_HOST || "localhost";
 const isAiven = dbHost.includes("aivencloud.com");
