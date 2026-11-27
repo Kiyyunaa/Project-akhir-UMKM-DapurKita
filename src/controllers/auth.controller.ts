@@ -14,50 +14,62 @@ async function getPrimaryAddress(userId: number): Promise<string | null> {
 }
 
 // 1. Registrasi Akun Pengguna Baru (Role otomatis 'user')
+
 export async function register(req: Request, res: Response) {
+  let connection: Awaited<ReturnType<typeof db.getConnection>> | null = null;
+
   try {
     const { name, email, password, phone, address } = req.body;
 
-    // Cek apakah email sudah terdaftar
-    const [existing]: any = await db.execute(
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+
+    // Cek email yang sudah terdaftar
+    const [existing]: any = await connection.execute(
       "SELECT id FROM pengguna WHERE email = ? LIMIT 1",
       [email]
     );
 
     if (existing.length > 0) {
+      await connection.rollback();
+
       return res.status(409).json({
         message: "Email sudah terdaftar. Silakan gunakan email lain.",
       });
     }
 
-    // Hash kata sandi
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Simpan user ke tabel pengguna
-    const [result]: any = await db.execute(
-      `INSERT INTO pengguna (nama_pengguna, email, kata_sandi, telepon, peran, aktif)
+    // Simpan akun pengguna
+    const [result]: any = await connection.execute(
+      `INSERT INTO pengguna
+       (nama_pengguna, email, kata_sandi, telepon, peran, aktif)
        VALUES (?, ?, ?, ?, ?, TRUE)`,
       [name, email, hashedPassword, phone || null, roleToDb("user")]
     );
 
     const userId = result.insertId;
 
-    // Simpan alamat utama bila dikirim
+    // Simpan alamat utama jika tersedia
     if (address) {
-      await db.execute(
-        `INSERT INTO alamat (pengguna_id, nama_penerima, telepon, detail_alamat, utama)
+      await connection.execute(
+        `INSERT INTO alamat
+         (pengguna_id, nama_penerima, telepon, detail_alamat, utama)
          VALUES (?, ?, ?, ?, TRUE)`,
         [userId, name, phone || "", address]
       );
     }
 
-    // Buat token JWT
-    const token = generateToken({
-      id: userId,
-      role: "user",
-      name,
-      email,
-    });
+    // Buat token sebelum transaksi diselesaikan
+   const token = generateToken({
+  id: userId,
+  role: "user",
+  name,
+  email,
+  token_version: 0,
+});
+    await connection.commit();
 
     return res.status(201).json({
       message: "Registrasi berhasil.",
@@ -71,45 +83,80 @@ export async function register(req: Request, res: Response) {
       },
       token,
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (connection) {
+      await connection.rollback();
+    }
+
+    // Menangani kemungkinan email duplikat
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        message: "Email sudah terdaftar. Silakan gunakan email lain.",
+      });
+    }
+
     console.error("Register error:", error);
+
     return res.status(500).json({
       message: "Terjadi kesalahan pada server saat registrasi.",
     });
+  } finally {
+    connection?.release();
   }
 }
 
 // 2. Login Akun (User & Admin)
+
 export async function login(req: Request, res: Response) {
   try {
     const { email, password } = req.body;
 
-    // Cari user berdasarkan email
+    // Cari akun berdasarkan email
     const [users]: any = await db.execute(
-      `SELECT id, nama_pengguna AS name, email, kata_sandi AS password,
-              peran, telepon AS phone
-       FROM pengguna WHERE email = ? LIMIT 1`,
-      [email]
-    );
+  `SELECT id, nama_pengguna AS name, email,
+          kata_sandi AS password, peran, telepon AS phone,
+          aktif, token_version
+   FROM pengguna
+   WHERE email = ?
+   LIMIT 1`,
+  [email]
+);
 
-    const user = mapUserRow(users[0] || {});
-
-    // Jika user tidak ditemukan atau password salah
-    if (!user.id || !(await bcrypt.compare(password, user.password))) {
+    if (users.length === 0) {
       return res.status(401).json({
         message: "Email atau kata sandi tidak valid.",
       });
     }
 
+    const user = mapUserRow(users[0]);
+
+    // Periksa status akun
+    if (!user.aktif) {
+      return res.status(403).json({
+        message: "Akun Anda sedang dinonaktifkan.",
+      });
+    }
+
+    // Periksa password
+    const passwordValid = await bcrypt.compare(password, user.password);
+
+    if (!passwordValid) {
+      return res.status(401).json({
+        message: "Email atau kata sandi tidak valid.",
+      });
+    }
+
+    // Ambil alamat utama
     const address = await getPrimaryAddress(user.id);
 
-    // Buat token JWT
+    // Buat JWT
     const token = generateToken({
-      id: user.id,
-      role: user.role,
-      name: user.name,
-      email: user.email,
-    });
+  id: user.id,
+  role: user.role,
+  name: user.name,
+  email: user.email,
+  token_version: user.token_version,
+});
 
     return res.status(200).json({
       message: "Login berhasil.",
@@ -125,11 +172,13 @@ export async function login(req: Request, res: Response) {
     });
   } catch (error) {
     console.error("Login error:", error);
+
     return res.status(500).json({
       message: "Terjadi kesalahan pada server saat login.",
     });
   }
 }
+
 
 // 3. Mengambil Profil Pengguna yang Sedang Login
 export async function getProfile(req: Request, res: Response) {
