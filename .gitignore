@@ -1,3 +1,6 @@
+# git ignore
+.gitignore
+.gitignore.example
 
 # Environment
 .env
@@ -31,3 +34,7 @@ Thumbs.db
 
 # Aiven certificate
 aiven-ca.pem
+
+# File dokumentasi pribadi
+dokumentasi.md
+API_TESTING_GUIDE.md

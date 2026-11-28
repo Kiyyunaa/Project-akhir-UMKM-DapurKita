@@ -1,11 +1,5 @@
 import { Router } from "express";
-import {
-  getAllProducts,
-  getProductById,
-  createProduct,
-  updateProduct,
-  deleteProduct,
-} from "../controllers/product.controller";
+import {getAllProducts,getProductById,createProduct,updateProduct,deleteProduct,} from "../controllers/product.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { adminMiddleware } from "../middlewares/role.middleware";
 import { upload } from "../middlewares/upload.middleware";
